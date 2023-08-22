@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:developer';
 import 'dart:io';
 
 import 'package:clock/clock.dart';
@@ -64,7 +65,7 @@ class WebHelper {
     try {
       await for (final result
           in _updateFile(url, key, authHeaders: authHeaders)) {
-        subject.add(result);
+        if (result != null) subject.add(result);
       }
     } on Object catch (e, stackTrace) {
       subject.addError(e, stackTrace);
@@ -83,19 +84,24 @@ class WebHelper {
   }
 
   ///Download the file from the url
-  Stream<FileResponse> _updateFile(String url, String key,
+  Stream<FileResponse?> _updateFile(String url, String key,
       {Map<String, String>? authHeaders}) async* {
-    var cacheObject = await _store.retrieveCacheData(key);
-    cacheObject = cacheObject == null
-        ? CacheObject(
-            url,
-            key: key,
-            validTill: clock.now(),
-            relativePath: '${const Uuid().v1()}.file',
-          )
-        : cacheObject.copyWith(url: url);
-    final response = await _download(cacheObject, authHeaders);
-    yield* _manageResponse(cacheObject, response);
+    try {
+      var cacheObject = await _store.retrieveCacheData(key);
+      cacheObject = cacheObject == null
+          ? CacheObject(
+              url,
+              key: key,
+              validTill: clock.now(),
+              relativePath: '${const Uuid().v1()}.file',
+            )
+          : cacheObject.copyWith(url: url);
+      final response = await _download(cacheObject, authHeaders);
+      yield* _manageResponse(cacheObject, response);
+    } catch (e) {
+      log('Error catched in updateFile: $e');
+      yield null;
+    }
   }
 
   Future<FileServiceResponse> _download(
