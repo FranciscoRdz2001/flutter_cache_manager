@@ -52,28 +52,32 @@ class WebHelper {
     String key,
     Map<String, String>? authHeaders,
   ) async {
-    //Add to queue if there are too many calls.
-    if (concurrentCalls >= fileFetcher.concurrentFetches) {
-      _queue.add(QueueItem(url, key, authHeaders));
-      return;
-    }
-    cacheLogger.log(
-        'CacheManager: Downloading $url', CacheManagerLogLevel.verbose);
-
-    concurrentCalls++;
-    final subject = _memCache[key]!;
     try {
-      await for (final result
-          in _updateFile(url, key, authHeaders: authHeaders)) {
-        if (result != null) subject.add(result);
+      //Add to queue if there are too many calls.
+      if (concurrentCalls >= fileFetcher.concurrentFetches) {
+        _queue.add(QueueItem(url, key, authHeaders));
+        return;
       }
-    } on Object catch (e, stackTrace) {
-      subject.addError(e, stackTrace);
-    } finally {
-      concurrentCalls--;
-      await subject.close();
-      _memCache.remove(key);
-      _checkQueue();
+      cacheLogger.log(
+          'CacheManager: Downloading $url', CacheManagerLogLevel.verbose);
+
+      concurrentCalls++;
+      final subject = _memCache[key]!;
+      try {
+        await for (final result
+            in _updateFile(url, key, authHeaders: authHeaders)) {
+          if (result != null) subject.add(result);
+        }
+      } on Object catch (e, stackTrace) {
+        subject.addError(e, stackTrace);
+      } finally {
+        concurrentCalls--;
+        await subject.close();
+        _memCache.remove(key);
+        _checkQueue();
+      }
+    } catch (e) {
+      log('Error catched in _downloadOrAddToQueue: $e');
     }
   }
 
@@ -97,6 +101,10 @@ class WebHelper {
             )
           : cacheObject.copyWith(url: url);
       final response = await _download(cacheObject, authHeaders);
+      if (response == null) {
+        yield null;
+        return;
+      }
       yield* _manageResponse(cacheObject, response);
     } catch (e) {
       log('Error catched in updateFile: $e');
@@ -104,21 +112,26 @@ class WebHelper {
     }
   }
 
-  Future<FileServiceResponse> _download(
-      CacheObject cacheObject, Map<String, String>? authHeaders) {
-    final headers = <String, String>{};
-    if (authHeaders != null) {
-      headers.addAll(authHeaders);
+  Future<FileServiceResponse?> _download(
+      CacheObject cacheObject, Map<String, String>? authHeaders) async {
+    try {
+      final headers = <String, String>{};
+      if (authHeaders != null) {
+        headers.addAll(authHeaders);
+      }
+
+      final etag = cacheObject.eTag;
+
+      // Adding `if-none-match` header on web causes a CORS error.
+      if (etag != null && !kIsWeb) {
+        headers[HttpHeaders.ifNoneMatchHeader] = etag;
+      }
+
+      return fileFetcher.get(cacheObject.url, headers: headers);
+    } catch (e) {
+      log('Error catched in _download: $e');
+      return null;
     }
-
-    final etag = cacheObject.eTag;
-
-    // Adding `if-none-match` header on web causes a CORS error.
-    if (etag != null && !kIsWeb) {
-      headers[HttpHeaders.ifNoneMatchHeader] = etag;
-    }
-
-    return fileFetcher.get(cacheObject.url, headers: headers);
   }
 
   Stream<FileResponse> _manageResponse(
